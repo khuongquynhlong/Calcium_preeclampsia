@@ -10,7 +10,7 @@ library(doParallel)
 library(microbenchmark)
 
 
-#---------- Set up parallel
+#---------- Set up parallel on all available cores
 #===============================================================================
 cores <- detectCores()
 cores
@@ -634,8 +634,7 @@ g_boot <- function(data, nimp, threshold, montecarlo, randomization = NULL,
     boot_num <- seed
     gdat <- data.frame(boot_num,id,id_ori,mm,Vp,Rp,T1p,T2p,T3p,Zp,Xp,Cp,Sp,Yp,Dp,Trp,c_index, GA)
     gdat$lastid <- as.numeric(!duplicated(gdat$id, fromLast = T))
-    gdat$last<-as.numeric(!(gdat$Cp==0)|!(gdat$Sp==0)|!(gdat$Yp==0)|!(gdat$Dp==0)|gdat$lastid==1|gdat$mm==lngth)
-    # gdat <- gdat[gdat$last == 1 & gdat$Zp==1, ] |> as.data.frame()
+    gdat$last <- as.numeric(!(gdat$Cp==0)|!(gdat$Sp==0)|!(gdat$Yp==0)|!(gdat$Dp==0)|gdat$lastid==1|gdat$mm==lngth)
     return(gdat)
  }
   # Running parallel
@@ -670,8 +669,6 @@ mean(nc_df[nc_df$last == 1 & nc_df$Rp==0, ] $Yp)
 
 saveRDS(nc_df, file = "Data/Imputed data/allImpute_preecl_NC.RDS")
 
-nc_df <- readRDS("Data/Imputed data/allImpute_preecl_NC.RDS")
-
 
 
 
@@ -681,13 +678,13 @@ nc_df <- readRDS("Data/Imputed data/allImpute_preecl_NC.RDS")
 #===============================================================================
 start_time <- Sys.time()
 r_treat <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0, 
-                                            montecarlo = 2000, randomization = 1,
+                                            montecarlo = 10000, randomization = 1,
                                             adherence = NULL, interaction = NULL, 
                                             length = 60, seed = 0))
 treated_ITT <- do.call(rbind, r_treat)
 
 r_placebo <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0,
-                                              montecarlo = 2000, randomization = 0,
+                                              montecarlo = 10000, randomization = 0,
                                               adherence = NULL, interaction = NULL, 
                                               length = 60, seed = 0))
 placebo_ITT <- do.call(rbind, r_placebo)
@@ -705,7 +702,6 @@ mean(placebo_ITT[placebo_ITT$last == 1,] $Yp)
 
 
 save(treated_ITT, placebo_ITT, file = "Data/Imputed data/allImpute_ITT.RData")
-load("Data/Imputed data/allImpute_ITT.RData")
 
 
 
@@ -716,13 +712,13 @@ load("Data/Imputed data/allImpute_ITT.RData")
 #===============================================================================
 start_time <- Sys.time()
 r_treat <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0.8, 
-                                                 montecarlo = 5000, randomization = 1,
+                                                 montecarlo = 10000, randomization = 1,
                                                  adherence = 1, interaction = NULL, 
                                                  length = 60, seed = 0))
 treated_pp <- do.call(rbind, r_treat)
 
 r_placebo <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0.8,
-                                                   montecarlo = 5000, randomization = 0,
+                                                   montecarlo = 10000, randomization = 0,
                                                    adherence = 1, interaction = NULL, 
                                                    length = 60, seed = 0))
 placebo_pp <- do.call(rbind, r_placebo)
@@ -746,15 +742,14 @@ save(treated_pp, placebo_pp, file = "Data/Imputed data/allImpute_preecl_PP.RData
 #---------- Bootstrap for PP
 #===============================================================================
 bootFunc <- function(seedID){
-  estimate <- list()
-  r_treat <-  sapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0.8, 
-                                              montecarlo = 5000, randomization = 1,
+  r_treat <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0.8, 
+                                              montecarlo = 10000, randomization = 1,
                                               adherence = 1, interaction = NULL, 
                                               length = 60, seed = seedID))
   treated_pp <- do.call(rbind, r_treat)
   
-  r_placebo <-  sapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0.8,
-                                                montecarlo = 5000, randomization = 0,
+  r_placebo <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0.8,
+                                                montecarlo = 10000, randomization = 0,
                                                 adherence = 1, interaction = NULL, 
                                                 length = 60, seed = seedID))
   placebo_pp <- do.call(rbind, r_placebo)
@@ -776,38 +771,25 @@ bootFunc <- function(seedID){
   RR_preg <- mTreat_preg/mContr_preg
   
   # Save the results
-  estimate$bootnum     <- seedID
-  estimate$mTreat_all  <- mTreat_all
-  estimate$mContr_all  <- mContr_all
-  estimate$mTreat_preg <- mTreat_preg
-  estimate$mContr_preg <- mContr_preg
-  estimate$RD_all      <- RD_all
-  estimate$RR_all      <- RR_all
-  estimate$RD_preg     <- RD_preg
-  estimate$RR_preg     <- RR_preg
-  
-  return(estimate)
+  return(list(
+         bootnum     = seedID,
+         mTreat_all  = mTreat_all,
+         mContr_all  = mContr_all,
+         mTreat_preg = mTreat_preg,
+         mContr_preg = mContr_preg,
+         RD_all      = RD_all,
+         RR_all      = RR_all,
+         RD_preg     = RD_preg,
+         RR_preg     = RR_preg))
 }
 
 
 r_boot_pp <- sapply(1:200, function(seedID) bootFunc(seed = seedID))
-df_boot_pp <- do.call(rbind, r_boot_pp)
+df_boot_pp <- t(r_boot_pp) |> as.data.frame()
 
 
 
-boot_mTreat_all_pp  <- unlist(df_boot_pp[, 1])
-boot_mContr_all_pp  <- unlist(df_boot_pp[, 1])
-boot_mTreat_preg_pp <- unlist(df_boot_pp[, 1])
-boot_mContr_preg_pp <- unlist(df_boot_pp[, 1])
-boot_RD_all_pp      <- unlist(df_boot_pp[, 1])
-boot_RR_all_pp      <- unlist(df_boot_pp[, 1])
-boot_RD_preg_pp     <- unlist(df_boot_pp[, 1])
-boot_RR_preg_pp     <- unlist(df_boot_pp[, 1])
-
-
-save(boot_mTreat_all_pp, boot_mContr_all_pp, boot_mTreat_preg_pp, boot_mContr_preg_pp,
-     boot_RD_all_pp, boot_RR_all_pp, boot_RD_preg_pp, boot_RR_preg_pp,
-     file = "Data/Imputed data/allImpute_preecl_boot_PP.RData")
+saveRDS(df_boot_pp, file = "Data/Imputed data/allImpute_preecl_boot_PP.RDS")
 
 
 
