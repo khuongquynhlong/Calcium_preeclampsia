@@ -1,6 +1,8 @@
 library(tidyverse)
 library(mice)
 library(VIM)
+library(splines)
+library(mgcv)
 
 # Define not in operator
 `%!in%` = Negate(`%in%`)
@@ -136,16 +138,29 @@ mytheme <- function(...) {
 
 # Monthly adherence by month since enrollment
 #-------------------------------------------------------------------------------
-enroll_original <- df_unimp |> filter(!is.na(adhere_per)) |>
+# Create smooth for 95%CI
+enroll_original_df <- df_unimp |> filter(!is.na(adhere_per)) |>
   group_by(month_since_start, trt_grp) |>
   summarise(adhere_per_m = mean(adhere_per, na.rm = T),
             adhere_se = sd(adhere_per, na.rm = T)/sqrt(n()),
             adhere_ub = adhere_per_m + 1.96*adhere_se,
-            adhere_lb = adhere_per_m - 1.96*adhere_se) |>
+            adhere_lb = adhere_per_m - 1.96*adhere_se) 
+
+fit_adhere_ub <- gam(adhere_ub ~ s(month_since_start) + trt_grp,
+             method = "REML", data=enroll_original_df)
+fit_adhere_lb <- gam(adhere_lb ~ s(month_since_start) + trt_grp,
+                     method = "REML", data=enroll_original_df)
+
+enroll_original_df$adhere_ub_smooth <- predict(fit_adhere_ub)
+enroll_original_df$adhere_lb_smooth <- predict(fit_adhere_lb)
+
+
+# Plot
+enroll_original_CI <- enroll_original_df |>
   ggplot(aes(x = month_since_start, y = adhere_per_m, color = trt_grp)) +
   geom_point(alpha = 0.7) +
-  geom_smooth(fill = "gray80", se = F) +
-  geom_ribbon(aes(ymin=adhere_lb, ymax=adhere_ub), alpha=0.2) + 
+  geom_smooth(se = F) +
+  geom_ribbon(aes(ymin=adhere_lb_smooth, ymax=adhere_ub_smooth), alpha=0.05, linetype = 2) + 
   scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
   mytheme() +
   scale_color_brewer(palette = "Set1") +
@@ -155,7 +170,27 @@ enroll_original <- df_unimp |> filter(!is.na(adhere_per)) |>
     y = "% of adherence",
     title = "Original data"
     )
+enroll_original_CI
+
+
+
+enroll_original <- df_unimp |> 
+  group_by(month_since_start, trt_grp) |>
+  summarise(adhere_per = mean(adhere_per, na.rm = T)) |>
+  ggplot(aes(x = month_since_start, y = adhere_per, color = trt_grp)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(fill = "gray80", se = F) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  mytheme() +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    color = NULL,
+    x = "Month since enrollment",
+    y = "% of adherence",
+    title = "Original data"
+  )
 enroll_original
+
 
 enroll_original_70 <- df_unimp |> 
   group_by(month_since_start, trt_grp) |>
@@ -234,6 +269,9 @@ cowplot::plot_grid(enroll_original, enroll_original_70, ncol = 2, labels = "AUTO
 dev.off()
 
 
+png("Results/Imputation/Imputed_adherence_original.png", units="in", width = 9, height = 6, res = 300)
+enroll_original_CI
+dev.off()
 
 
 # Percentage of missing across months_since_enrollment
@@ -300,6 +338,82 @@ missing_by_month_cov <- df_unimp |>
 png("Results/Imputation/missing_by_month_covariates.png", units="in", width = 8, height = 5, res = 300)
 missing_by_month_cov
 dev.off()
+
+
+
+
+
+table(df_unimp$m_preeclamp)
+table(df_unimp$m_preeclamp)
+
+
+
+
+
+
+
+# Monthly adherence by month since enrollment
+#-------------------------------------------------------------------------------
+# Add censoring for pregnancy
+df_unimp <- df_unimp |> group_by(ID) |>
+  mutate(preg_cens_indi12 = if_else(m_preg == 0 & month_since_start > 12, 1, 0),
+         preg_cens_indi_cum12 = cumsum(preg_cens_indi12),
+         preg_cens_indi18 = if_else(m_preg == 0 & month_since_start > 18, 1, 0),
+         preg_cens_indi_cum18 = cumsum(preg_cens_indi18)) |>
+  ungroup()
+
+
+enroll_original_cut12 <- df_unimp |> 
+  filter(preg_cens_indi_cum12 == 0) |> 
+  group_by(month_since_start, trt_grp) |>
+  summarise(adhere_per = mean(adhere_per, na.rm = T)) |>
+  ggplot(aes(x = month_since_start, y = adhere_per, color = trt_grp)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(fill = "gray80", se = F) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  mytheme() +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    color = NULL,
+    x = "Month since enrollment",
+    y = "% Adherence",
+    title = "Censoring participants with no pregnancy after 12 months of enrollment"
+  )
+enroll_original_cut12
+
+
+
+
+enroll_original_cut18 <- df_unimp |> 
+  filter(preg_cens_indi_cum18 == 0) |> 
+  group_by(month_since_start, trt_grp) |>
+  summarise(adhere_per = mean(adhere_per, na.rm = T)) |>
+  ggplot(aes(x = month_since_start, y = adhere_per, color = trt_grp)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(fill = "gray80", se = F) +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+  mytheme() +
+  scale_color_brewer(palette = "Set1") +
+  labs(
+    color = NULL,
+    x = "Month since enrollment",
+    y = "% Adherence",
+    title = "Censoring participants with no pregnancy after 18 months of enrollment"
+  )
+enroll_original_cut18
+
+
+
+png("Results/Imputation/adherence_enroll_cut1218.png", units="in", width = 12, height = 5, res = 300)
+cowplot::plot_grid(enroll_original_cut12, enroll_original_cut18,
+                   ncol = 2, labels = "AUTO")
+dev.off()
+
+
+
+
+
+
 
 
 

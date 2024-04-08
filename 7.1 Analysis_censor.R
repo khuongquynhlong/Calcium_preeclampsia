@@ -25,7 +25,7 @@ load("imp_pre.RData")
 
 #----- Function for extract complete set and prepare data for g-computation
 #===============================================================================
-df_prep <- function(data, nimp) {
+df_prep <- function(data, nimp, preg_cens = NULL) {
   df_imp <- complete(data, nimp)
   
   # Baseline characteristics
@@ -82,6 +82,20 @@ df_prep <- function(data, nimp) {
            Cl = lag(C, n = 1, default =0)) |>
     ungroup() |>
     as.data.frame()
+  
+  # Add censoring for pregnancy
+  SS <- SS |> group_by(id) |>
+    mutate(preg_cens_indi = if_else(Z == 0 & j > preg_cens, 1, 0),
+           preg_cens_indi_cum = cumsum(preg_cens_indi)) |>
+    ungroup()
+  
+  if(!is.null(preg_cens)){
+    SS <- SS |> filter(preg_cens_indi_cum == 0) |>
+      mutate(S = if_else(Z == 0 & j == preg_cens, 1, S))
+  }
+  SS <- SS |> select(-c(preg_cens_indi, preg_cens_indi_cum)) |>
+    as.data.frame()
+  
   return(SS)
 }
 
@@ -90,9 +104,9 @@ df_prep <- function(data, nimp) {
 #----- Function to bootstrap the g Computation algorithm
 #===============================================================================
 g_boot <- function(data, nimp, threshold, montecarlo, randomization = NULL, 
-                   adherence = NULL, interaction = NULL, censoring = NULL, 
+                   adherence = NULL, interaction = NULL, censoring = NULL, preg_cens = NULL,
                    length = 60, seed) { 
-  df <- df_prep(data = data, nimp = nimp)
+  df <- df_prep(data = data, nimp = nimp, preg_cens = preg_cens)
   
   # Define adherence (999 = "natural course")
   if (threshold != 999) {
@@ -654,21 +668,21 @@ g_boot <- function(data, nimp, threshold, montecarlo, randomization = NULL,
 #===============================================================================
 start_time <- Sys.time()
 r_nc <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 999, 
-                                         montecarlo = 5000, randomization = NULL,
+                                         montecarlo = 10000, randomization = NULL,
                                          adherence = NULL, interaction = NULL, 
-                                         length = 60, seed = 0))
+                                         preg_cens = 12, length = 24, seed = 0))
 nc_df <- do.call(rbind, r_nc)
 elapsed_time <- Sys.time()-start_time
 print(elapsed_time)
 
 
-mean(nc_df[nc_df$last == 1 & nc_df$Zp==1 & nc_df$Rp==1, ] $Yp)
-mean(nc_df[nc_df$last == 1 & nc_df$Zp==1 & nc_df$Rp==0, ] $Yp)
+mean(nc_df[nc_df$last == 1 & nc_df$Zp==1 & nc_df$Rp==1, ]$Yp)
+mean(nc_df[nc_df$last == 1 & nc_df$Zp==1 & nc_df$Rp==0, ]$Yp)
 
 mean(nc_df[nc_df$last == 1 & nc_df$Rp==1, ] $Yp)
 mean(nc_df[nc_df$last == 1 & nc_df$Rp==0, ] $Yp)
 
-saveRDS(nc_df, file = "allImpute_preecl_NC.RDS")
+saveRDS(nc_df, file = "allImpute_preecl_NC_cens12.RDS")
 
 gc()
 
@@ -676,15 +690,15 @@ gc()
 #===============================================================================
 start_time <- Sys.time()
 r_treat <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0, 
-                                            montecarlo = 2000, randomization = 1,
+                                            montecarlo = 5000, randomization = 1,
                                             adherence = NULL, interaction = NULL, 
-                                            length = 60, seed = 0))
+                                            preg_cens = 12, length = 24, seed = 0))
 treated_ITT <- do.call(rbind, r_treat)
 
 r_placebo <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0,
-                                              montecarlo = 2000, randomization = 0,
+                                              montecarlo = 5000, randomization = 0,
                                               adherence = NULL, interaction = NULL, 
-                                              length = 60, seed = 0))
+                                              preg_cens = 12, length = 24, seed = 0))
 placebo_ITT <- do.call(rbind, r_placebo)
 elapsed_time <- Sys.time()-start_time
 print(elapsed_time)
@@ -698,22 +712,22 @@ mean(treated_ITT[treated_ITT$last == 1,] $Yp)
 mean(placebo_ITT[placebo_ITT$last == 1,] $Yp)
 
 
-save(treated_ITT, placebo_ITT, file = "allImpute_ITT.RData")
+save(treated_ITT, placebo_ITT, file = "allImpute_ITT_cens12.RData")
 
 
 #---------- PP analysis
 #===============================================================================
 start_time <- Sys.time()
-r_treat <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 3/7, 
+r_treat <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0.8, 
                                             montecarlo = 5000, randomization = 1,
                                             adherence = 1, interaction = NULL, 
-                                            length = 60, seed = 0))
+                                            preg_cens = 12, length = 24, seed = 0))
 treated_pp <- do.call(rbind, r_treat)
 
-r_placebo <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 3/7,
+r_placebo <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0.8,
                                               montecarlo = 5000, randomization = 0,
                                               adherence = 1, interaction = NULL, 
-                                              length = 60, seed = 0))
+                                              preg_cens = 12, length = 24, seed = 0))
 placebo_pp <- do.call(rbind, r_placebo)
 elapsed_time <- Sys.time()-start_time
 print(elapsed_time)
@@ -727,7 +741,9 @@ mean(treated_pp[treated_pp$last == 1,]$Yp)
 mean(placebo_pp[placebo_pp$last == 1,]$Yp)
 
 
-save(treated_pp, placebo_pp, file = "allImpute_preecl_PP_37cut.RData")
+save(treated_pp, placebo_pp, file = "allImpute_preecl_PP_cens12.RData")
+
+
 
 
 #---------- Bootstrap for PP
@@ -736,13 +752,13 @@ bootFunc <- function(seedID){
   r_treat <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0.8, 
                                               montecarlo = 2000, randomization = 1,
                                               adherence = 1, interaction = NULL, 
-                                              length = 60, seed = seedID))
+                                              preg_cens = 18, length = 36, seed = seedID))
   treated_pp <- do.call(rbind, r_treat)
   
   r_placebo <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0.8,
                                                 montecarlo = 2000, randomization = 0,
                                                 adherence = 1, interaction = NULL, 
-                                                length = 60, seed = seedID))
+                                                preg_cens = 18, length = 36, seed = seedID))
   placebo_pp <- do.call(rbind, r_placebo)
   
 
@@ -776,7 +792,7 @@ bootFunc <- function(seedID){
 
 start_time <- Sys.time()
 df_boot_pp <- NULL
-for (seed_boot in c(102:202)) {
+for (seed_boot in c(1:100)) {
   r_boot_pp <- bootFunc(seed_boot)
   df_boot <- t(r_boot_pp) |> as.data.frame()
   df_boot_pp <- rbind(df_boot_pp, df_boot)
@@ -784,9 +800,9 @@ for (seed_boot in c(102:202)) {
 elapsed_time <- Sys.time()-start_time
 print(elapsed_time)
 
-saveRDS(df_boot_pp, file = "allImpute_preecl_boot_PP100_200.RDS")
+saveRDS(df_boot_pp, file = "allImpute_preecl_boot_PP_cens_100.RDS")
 
-x <- readRDS("allImpute_preecl_boot_PP100_200.RDS")
+x <- readRDS("allImpute_preecl_boot_PP_cens_100.RDS")
 gc()
 
 quantile(unlist(x$mTreat_all), probs = c(0.025, 0.975))
@@ -811,7 +827,7 @@ bootFunc_NC <- function(seedID){
   r_nc <- lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 999, 
                                            montecarlo = 2000, randomization = NULL,
                                            adherence = NULL, interaction = NULL, 
-                                           length = 60, seed = seedID))
+                                          preg_cens = 18, length = 36, seed = seedID))
   nc_df <- do.call(rbind, r_nc)
 
   # Proportion among overall population
@@ -853,9 +869,9 @@ for (seed_boot in c(1:48, 50:94, 96:102)) {
 elapsed_time <- Sys.time()-start_time
 print(elapsed_time)
 
-saveRDS(df_boot_NC, file = "allImpute_preecl_boot_NC1_100.RDS")
+saveRDS(df_boot_NC, file = "allImpute_preecl_boot_NC_cens_100.RDS")
 
-x <- readRDS("allImpute_preecl_boot_NC1_100.RDS")
+x <- readRDS("allImpute_preecl_boot_NC_cens_100.RDS")
 gc()
 
 quantile(unlist(x$mTreat_all), probs = c(0.025, 0.975))
@@ -881,13 +897,13 @@ bootFunc_ITT <- function(seedID){
   r_treat <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0, 
                                               montecarlo = 2000, randomization = 1,
                                               adherence = NULL, interaction = NULL, 
-                                              length = 60, seed = seedID))
+                                              preg_cens = 18, length = 36, seed = seedID))
   treated_ITT <- do.call(rbind, r_treat)
   
   r_placebo <-  lapply(1:10, function(i) g_boot(data = imp, nimp = i, threshold = 0,
                                                 montecarlo = 2000, randomization = 0,
                                                 adherence = NULL, interaction = NULL, 
-                                                length = 60, seed = seedID))
+                                                preg_cens = 18, length = 36, seed = seedID))
   placebo_ITT <- do.call(rbind, r_placebo)
   
   
@@ -931,9 +947,9 @@ elapsed_time <- Sys.time()-start_time
 print(elapsed_time)
 
 
-saveRDS(df_boot_ITT, file = "allImpute_preecl_boot_ITT46_104.RDS")
+saveRDS(df_boot_ITT, file = "allImpute_preecl_boot_ITT_cens_100.RDS")
 
-x <- readRDS("allImpute_preecl_boot_ITT46_104.RDS")
+x <- readRDS("allImpute_preecl_boot_ITT_cens_100.RDS")
 gc()
 
 quantile(unlist(x$mTreat_all), probs = c(0.025, 0.975))
